@@ -1,14 +1,13 @@
 from pathlib import Path
 import traceback
 import uvicorn
-
 from fastapi import FastAPI, Request
 from fastapi.responses import HTMLResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 import nest_asyncio
-from backend import run_travel_agent
+from backend import run_travel_agent, resume_travel_agent
 
 
 # nested event loop
@@ -25,7 +24,8 @@ app = FastAPI(
 
 app.mount(
     "/static",
-    StaticFiles(directory=str(BASE_DIR / "static"))
+    StaticFiles(directory=str(BASE_DIR / "static")),
+    name="static"
 )
 
 templates = Jinja2Templates(directory=str(BASE_DIR / "templates"))
@@ -33,6 +33,15 @@ templates = Jinja2Templates(directory=str(BASE_DIR / "templates"))
 class TravelRequest(BaseModel):
     message: str
     thread_id: str | None = None 
+
+
+
+class ApprovalRequest(BaseModel):
+    thread_id: str = Field(min_length=1)
+    approved: bool
+    feedback: str = ""
+
+
 
 @app.get('/', response_class=HTMLResponse)
 async def home(request: Request):
@@ -64,25 +73,57 @@ async def travel_planner(request_data: TravelRequest):
         return JSONResponse(
             content={
                 "success": True,
-                "thread_id": result["thread_id"],
-                "answer": result["answer"],
-                "flight_results": result["flight_results"],
-                "hotel_results": result["hotel_results"],
-                "itinerary": result["itinerary"],
-                "llm_calls": result["llm_calls"],
+                **result,
             }
         )
 
-    except Exception as e:
-        print("ERROR:", e)
+    except Exception as exc:
+        print("ERROR:", exc)
         traceback.print_exc()
 
         return JSONResponse(
             status_code=500,
             content={
                 "success": False,
-                "error": str(e)
+                "error": str(exc)
             }
+        )
+
+
+@app.post("/api/travel/approve")
+async def approve_travle_plane(request_data: ApprovalRequest):
+    try:
+        if not request_data.approved and not request_data.feedback.strip():
+            return JSONResponse(
+                status_code=400,
+                content={
+                    "success": False,
+                    "error": "Please provide revision feedback when rejecting the draft.",
+                }
+            )
+
+        result = resume_travel_agent(
+            thread_id=request_data.thread_id,
+            approved=request_data.approved,
+            feedback=request_data.feedback
+        )
+
+        return JSONResponse(
+            content={
+                "success": True,
+                **result
+            }
+        )
+    except Exception as exc:
+        print("APPROVAL ERROR:", exc)
+        traceback.print_exc()
+
+        return JSONResponse(
+            status_code=500,
+            content={
+                "success": False,
+                "error": str(exc),
+            },
         )
 
 
@@ -90,7 +131,12 @@ async def travel_planner(request_data: TravelRequest):
 async def health_check():
     return{
         "status": "ok",
-        "message": "AI Travel Planner is running"
+        "message": "AI Travel Planner is running",
+        "features": [
+            "supervisor_agent",
+            "input_guardrail",
+            "human_in_the_loop",
+        ],
     }
 
 @app.get("/favicon.ico")
