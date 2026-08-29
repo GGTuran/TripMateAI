@@ -1,29 +1,76 @@
-from mcp.server.fastmcp import FastMCP
+import os
+from pathlib import Path
+from typing import Any
 import requests
-import os 
 from dotenv import load_dotenv
+from mcp.server.fastmcp import FastMCP
 
-load_dotenv()
+
+
+
+BASE_DIR = Path(__file__).resolve().parent
+load_dotenv(BASE_DIR / ".env")
 
 OPENWEATHER_API_KEY = os.getenv("OPENWEATHER_API_KEY")
 mcp = FastMCP("Weather MCP Server")
+REQUEST_TIMEOUT_SECONDS = 20
+
+
+def _get_api_key() -> str:
+    if not OPENWEATHER_API_KEY:
+        raise RuntimeError(
+            "OPENWEATER_API_KEY is missinig "
+            "from the project .env file."
+        )
+    return OPENWEATHER_API_KEY
+
+
+def _request_json(url: str, params: dict[str, Any]) -> dict[str, Any]:
+    try:
+        response = requests.get(url, params=params, timeout=REQUEST_TIMEOUT_SECONDS)
+        response.raise_for_status()
+
+        return response.json()
+    
+    except requests.RequestException as exc:
+        details = ""
+        failed_response = getattr(exc, "response", None)
+
+        if failed_response is not None:
+            details = (
+                f" Response: "
+                f"{failed_response.text[:500]}"
+            )
+
+        raise RuntimeError(
+            f"Openweathe request failed: "
+            f"{exc}.{details}"
+
+        ) from exc
+
+
 
 
 @mcp.tool()
-def get_current_weather(city:str):
-    response = requests.get(
+def get_current_weather(city:str) -> dict[str, Any]:
+
+    """Return the current weather for a city."""
+
+    city = city.strip()
+
+    if not city:
+        raise ValueError("City cannot be empty")
+
+    data = _request_json(
         "https://api.openweathermap.org/data/2.5/weather",
         params={
             "q": city,
-            "appid": OPENWEATHER_API_KEY,
+            "appid": _get_api_key(),
             "units": "metric"
         }
     )
 
-    data = response.json()
-
-    if response.status_code != 200:
-        return data
+    
     
     return {
         "city": data["name"],
@@ -36,38 +83,42 @@ def get_current_weather(city:str):
 
 
 @mcp.tool()
-def get_forecast(city: str):
+def get_forecast(city: str) -> dict[str, Any]:
 
-    url = (
-        "https://api.openweathermap.org/data/2.5/forecast"
+    """Return the first five three-four forecast entries for city"""
+
+    city = city.strip()
+
+    if not city:
+        raise ValueError("City cannot be empty")
+    
+
+    data = _request_json(
+        "https://api.openweathermap.org/data/2.5/forecast",
+        {
+            "q": city,
+            "appid": _get_api_key(),
+            "units": "metric",
+        },
     )
 
-    params = {
-        "q": city,
-        "appid": OPENWEATHER_API_KEY,
-        "units": "metric"
-    }
-
-    response = requests.get(url, params=params)
-    data = response.json()
-    forecast = []
-
-    # return first five forecast entries
-    for item in data["list"][:5]:
-        forecast.append(
-            {
-                "datetime": item["dt_txt"],
-                "temperature": item["main"]["temp"],
-                "weather": item["weather"][0]["description"]
-            }
-        )
+    forecast = [
+        {
+            "datetime": item["dt_txt"],
+            "temperature_c": item["main"]["temp"],
+            "condition": item["weather"][0]["description"],
+        }
+        for item in data.get("list", [])[:5]
+    ]
 
     return {
-        "city": city,
+        "city": data.get("city",{},).get("name",city,),
         "forecast": forecast
     }
 
 
 
 if __name__ == "__main__":
-    mcp.run()
+    mcp.run(
+        transport="stdio"
+    )

@@ -55,6 +55,7 @@ class TravelState(TypedDict):
     hotel_results: str
     itinerary: str
     llm_calls: int
+    weather_results: str
 
 # # flight agent
 # def flight_agent(state: TravelState):
